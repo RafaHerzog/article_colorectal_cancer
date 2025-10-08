@@ -203,26 +203,9 @@ system.time(resultados <- simulacao_predicoes_xgboost_rsf(
   vetor_p_cens = c(0.25, 0.4, 0.5, 0.6, 0.7),
   vetor_n = c(500, 1000, 2500, 5000),
   vetor_tempos_interesse = c(1, 3, 5),
-  M = 1,
+  M = 1000,
   prop_n0 = 0.4,
   prop_n1 = 0.6
 ))
-
-# Testes
-t1 <- 5
-t2 <-  20
-vetor_p1 = c(0.8319006, 0.7201794)
-vetor_p2 = c(0.7382254, 0.5685534)
-# shape0 <- 30
-# scale0 <- 300
-# shape1 <- 20
-# scale1 <- 200
-seed <- 803
-p_cens <- c(0.7)
-n <- c(500)
-tempo <- c(3)
-M <- 50
-prop_n0 <- 0.4
-prop_n1 <- 0.6
 
 
