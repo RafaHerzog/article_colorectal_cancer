@@ -17,16 +17,18 @@ Este relatório tem como objetivo prover os resultados iniciais do estudo de sim
 
 ### Geração dos tempos de sobrevivência latentes
 
-Foram gerados tempos de sobrevivência de dois grupos distintos, simulando o comportamento das curvas de sobrevivência estimadas via Kaplan-Meier para pacientes do conjunto de dados original que realizaram e não realizaram quimioterapia. Os dados de ambos os grupos foram simulados a partir de distribuições Weibull, cujos parâmetros são descritos abaixo:
+Foram gerados tempos de sobrevivência de dois grupos distintos, simulando o comportamento das curvas de sobrevivência estimadas via Kaplan-Meier para pacientes do conjunto de dados original que estavam nos estadiamentos clínicos I e II. Os dados de ambos os grupos foram simulados a partir de distribuições Weibull, cujos parâmetros são descritos abaixo:
 
-- **Para as observações com preditor 0,** foram gerados dados da distribuição Weibull com parâmetros `shape = 0,2581641` e `scale = 68,4235846` (correspondentes a uma distribuição Weibull com mediana de 16,544 e valor esperado de 1359,731);
-- **Para as observações com preditor 1,** foram gerados dados da distribuição Weibull com parâmetros `shape = 0,333643` e `scale = 16,918016` (correspondentes a uma distribuição Weibull com mediana de 5,640 e valor esperado de 101,154).
+- **Para as observações com preditor 0** (simulando pacientes que estavam no estadiamento clínico I), foram gerados dados da distribuição Weibull com parâmetros `shape = 0,48414` e `scale = 164,92854` (correspondentes a uma distribuição Weibull com mediana de 77,360 e valor esperado de 350,710);
+- **Para as observações com preditor 1** (simulando pacientes que estavam no estadiamento clínico II), foram gerados dados da distribuição Weibull com parâmetros `shape = 0,5057387` e `scale = 45,2447631` (correspondentes a uma distribuição Weibull com mediana de 21,919 e valor esperado de 88,623).
 
 Para a obtenção desses parâmetros, foram obtidas as probabilidade de sobrevivência estimadas nos tempos 5 e 10 para cada grupo de pacientes, as quais foram tratadas como probabilidades teóricas e foram plugadas nas expressões fechadas de cada parâmetro, obtidas a partir da função de sobrevivência da distribuição Weibull. 
 
+Foram escolhidos esses dois grupos pois eles garantiam que os limites superiores das distribuições uniformes ligadas ao tempo de censura fossem maiores do que 5 ("anos") em todos os cenários considerados.
+
 ### Geração dos tempos de censura
 
-Para a obtenção dos tempos de censura, foram geradas observações de distribuições uniforme no intervalo $[0, \theta_i]$, $i = 0, 1$, sendo $\theta_i$ o valor de $\theta$ que resolvesse a equação $p_c = P(T_i > C_i)$, onde $p_c$ é a probabilidade de censura, $T_i$ é o tempo de sobrevivência latente, que segue a distribuição Weibull cujos parâmetros são especificados acima, e $C_i$ é o tempo de censura, que segue distribuição uniforme no intervalo $[0, \theta_i]$.
+Para a obtenção dos tempos de censura, foram geradas observações de variáveis aleatórias $C_i$ com distribuição uniforme no intervalo $[0, \theta_i]$, $i = 0, 1$, sendo $\theta_i$ o valor de $\theta$ que resolvesse a equação $p_c = P(T_i > C_i)$, onde $p_c$ é a probabilidade de censura e $T_i$ é o tempo de sobrevivência latente - que segue a distribuição Weibull cujos parâmetros são especificados acima.
 
 Os valores de $\theta$ encontrados para cada probabilidade de censura e preditor podem ser vistos na tabela abaixo.
 
@@ -36,12 +38,12 @@ library(knitr)
 
 # Criando o data frame com os valores arredondados
 tabela_df <- data.frame(
-  "Theta / Prob. de censura" = c("theta0", "theta1"),
-  "0,25" = c("677,427", "126,120"),
-  "0,4"  = c("129,396", "34,213"),
-  "0,5"  = c("42,914", "14,420"),
-  "0,6"  = c("12,927", "5,655"),
-  "0,7"  = c("3,169", "1,894"),
+  "Theta / Prob. de censura" = c("Relacionado ao preditor 0", "Relacionado ao preditor 1"),
+  "0,25" = c("908,873", "242,288"),
+  "0,4"  = c("354,887", "97,841"),
+  "0,5"  = c("192,396", "54,306"),
+  "0,6"  = c("99,668", "28,878"),
+  "0,7"  = c("46,437", "13,880"),
   check.names = FALSE
 )
 
@@ -52,7 +54,7 @@ kable(tabela_df, digits = 3, align = "c", caption = "Valores de theta para cada 
 
 ### Sobre as amostras e o ajuste dos modelos
 
-Em todas as amostras simuladas, 70% das observações foram geradas com preditor 1 e 30% com preditor 0 (mantendo as proporções observadas para a variável de quimioterapia no conjunto de dados original).
+Em todas as amostras simuladas, 60% das observações foram geradas com preditor 1 e 40% com preditor 0 (mantendo, aproximadamente, a proporcionalidade observada entre os grupos I e II da variável ECGRUP no conjunto de dados original).
 
 Durante as simulações, após a divisão entre conjuntos de treino e teste, foram criados novos conjuntos de treino e teste específicos para o XGBoost, retirando as observações censuradas que tivessem tempo observado menor que o tempo de interesse daquela simulação.
 

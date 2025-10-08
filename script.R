@@ -8,32 +8,36 @@ library(glue)
 # Importando os arquivos com funções auxiliares
 source("funcao_gera_amostras.R")
 source("funcao_tune_xgboost.R")
+source("funcao_obtem_params.R")
 
-simulacao_predicoes_xgboost_rsf <- function(t1, t2, p1_1, p2_1, p1_2, p2_2, seed, vetor_p_cens, vetor_n, vetor_tempos_interesse, M, prop_n0, prop_n1) {
+simulacao_predicoes_xgboost_rsf <- function(t1, t2, vetor_p1, vetor_p2, seed, vetor_p_cens, vetor_n, vetor_tempos_interesse, M, prop_n0, prop_n1) {
   # Criando um dataframe que irá guardar os vícios e EQMs médios
   df_estatisticas_medias <- data.frame()
   
+  seed_p_cens <- seed
+  seed_tempos <- seed
+  seed_amostras <- seed
+  
   for (p_cens in vetor_p_cens) {
+    # Obtendo os parâmetros das distribuições Weibull de interesse
+    params <- funcao_obtem_params(t1 = t1, t2 = t2, vetor_p1 = vetor_p1, vetor_p2 = vetor_p2, seed = seed_p_cens, p_cens = p_cens)
+    params0 <- params$params0
+    params1 <- params$params1
+    
+    # Atualizando a seed 
+    seed_p_cens <- seed_p_cens + 1
     
     for (tempo in vetor_tempos_interesse) {
-      
       # Gerando uma amostra inicial para treinar os hiperparâmetros dos modelos
-      amostras_aux <- gera_valores_censurados(
-        t1 = t1, t2 = t2,
-        p1_1 = p1_1, p2_1 = p2_1,
-        p1_2 = p1_2, p2_2 = p2_2,
+      df_amostras <- funcao_gera_amostras(
+        params0 = params0, params1 = params1,
         p_cens = p_cens,
         n = 10000, prop_n0 = prop_n0, prop_n1 = prop_n1,
-        seed = seed
+        seed = seed_tempos
       )
-      
-      # Salvando o dataframe de amostras e os parâmetros das variáveis Weibull utilizadas
-      df_amostras <- amostras_aux$df_amostras
-      params0 <- amostras_aux$params0
-      params1 <- amostras_aux$params1
-      
+
       # Criando um conjunto de treinamento 
-      set.seed(seed)
+      set.seed(seed_tempos)
       linhas_treino <- createDataPartition(
         df_amostras$falha,
         p = 0.7, 
@@ -57,8 +61,11 @@ simulacao_predicoes_xgboost_rsf <- function(t1, t2, p1_1, p2_1, p1_2, p2_2, seed
       
       # Tunando os hiperparâmetros do XGBoost
       print(glue("Tunando os hiperparâmetros do XGBoost para o cenário de p_cens = {p_cens} e tempo de interesse = {tempo}"))
-      params_xgboost <- funcao_tune_xgboost(X_train = X_train_classificacao, y_train = y_train_classificacao, seed = as.integer(seed))
+      params_xgboost <- funcao_tune_xgboost(X_train = X_train_classificacao, y_train = y_train_classificacao, seed = as.integer(seed_tempos))
       ## Para a RSF, não faz sentido tunar os hiperparâmetros, pois só temos um preditor binário
+      
+      # Atualizando a seed
+      seed_tempos <- seed_tempos + 1
       
       # Iniciando as simulações
       for (n in vetor_n) {
@@ -67,21 +74,16 @@ simulacao_predicoes_xgboost_rsf <- function(t1, t2, p1_1, p2_1, p1_2, p2_2, seed
         df_predicoes <- data.frame()
         
         for (i in 1:M) {
-          # Mudando o valor da semente
-          seed <- seed + 1
-          
           # Gerando uma amostra de tamanho n de (tempo de falha, indicador de falha, preditor)
-          df_amostras <- gera_valores_censurados(
-            t1 = t1, t2 = t2,
-            p1_1 = p1_1, p2_1 = p2_1,
-            p1_2 = p1_2, p2_2 = p2_2,
+          df_amostras <- funcao_gera_amostras(
+            params0 = params0, params1 = params1,
             p_cens = p_cens,
             n = n, prop_n0 = prop_n0, prop_n1 = prop_n1,
-            seed = seed
-          )$df_amostras
+            seed = seed_amostras
+          )
           
           # Criando conjunto de treinamento e teste
-          set.seed(seed)
+          set.seed(seed_amostras)
           linhas_treino <- createDataPartition(
             df_amostras$falha,
             p = 0.7, 
@@ -123,7 +125,7 @@ simulacao_predicoes_xgboost_rsf <- function(t1, t2, p1_1, p2_1, p1_2, p2_2, seed
           
           # Treinando os modelos 
           ## Para o XGBoost
-          params_xgboost['random_state'] <- as.integer(seed)
+          params_xgboost['random_state'] <- as.integer(seed_amostras)
           params_xgboost['scale_pos_weight'] <- 0.3
           
           fit_xgboost <- xgb$XGBClassifier()
@@ -138,15 +140,15 @@ simulacao_predicoes_xgboost_rsf <- function(t1, t2, p1_1, p2_1, p1_2, p2_2, seed
           
           # Fazendo as predições
           ## Para o XGBoost (salvando apenas as predições para a classe 1 da resposta)
-          predicoes_xgboost <- fit_xgboost$predict_proba(X_test_classificacao)[, 1]
+          predicoes_xgboost <- fit_xgboost$predict_proba(X_test_classificacao)[, 2]
           
           ## Para a RSF
           predicoes_rsf <- predict.rfsrc(fit_rsf, df_teste)
           probs_rsf_tempo_interesse <- predicoes_rsf$survival[, which.min(abs(predicoes_rsf$time.interest[which(predicoes_rsf$time.interest <= tempo)] - tempo))]
           
           ## Calculando as probabilidades de sobrevivência teóricas para cada grupo
-          prob_teorica0 <- pweibull(tempo, shape = params0["shape"], scale = params0["scale"], lower.tail = FALSE)
-          prob_teorica1 <- pweibull(tempo, shape = params1["shape"], scale = params1["scale"], lower.tail = FALSE)
+          prob_teorica0 <- pweibull(tempo, shape = params0$shape, scale = params0$scale, lower.tail = FALSE)
+          prob_teorica1 <- pweibull(tempo, shape = params1$shape, scale = params1$scale, lower.tail = FALSE)
           
           # Criando um dataframe com as probabilidades estimadas e teóricas de cada observação no conjunto de teste
           df_predicoes_aux <- data.frame(
@@ -164,7 +166,10 @@ simulacao_predicoes_xgboost_rsf <- function(t1, t2, p1_1, p2_1, p1_2, p2_2, seed
           
           print(paste(p_cens, tempo, n, i))
           
-          write.csv(df_predicoes, glue("resultados2/df_predicoes_{p_cens}_{tempo}_{n}.csv"), row.names = FALSE)
+          write.csv(df_predicoes, glue("resultados/df_predicoes_{p_cens}_{tempo}_{n}.csv"), row.names = FALSE)
+          
+          # Atualizando a seed
+          seed_amostras <- seed_amostras + 1
         }
         
         # Calculando os vícios e EQMs ao final das M simulações
@@ -181,42 +186,43 @@ simulacao_predicoes_xgboost_rsf <- function(t1, t2, p1_1, p2_1, p1_2, p2_2, seed
         # Juntando com o restante dos resultados
         df_estatisticas_medias <- bind_rows(df_estatisticas_medias, df_estatisticas_medias_aux)
         
-        write.csv(df_estatisticas_medias, "resultados2/resultados_finais.csv", row.names = FALSE)
+        write.csv(df_estatisticas_medias, "resultados/resultados_finais.csv", row.names = FALSE)
       }
     }
   }
   return(df_estatisticas_medias)
 }
 
-resultados <- simulacao_predicoes_xgboost_rsf(
+
+system.time(resultados <- simulacao_predicoes_xgboost_rsf(
   t1 = 5,
-  t2 =  10,
-  p1_1 = 0.6011338,
-  p2_1 = 0.5440756,
-  p1_2 = 0.5138367,
-  p2_2 = 0.4321000,
+  t2 =  20,
+  vetor_p1 = c(0.8319006, 0.7201794),
+  vetor_p2 = c(0.7382254, 0.5685534),
   seed = 803,
   vetor_p_cens = c(0.25, 0.4, 0.5, 0.6, 0.7),
   vetor_n = c(500, 1000, 2500, 5000),
   vetor_tempos_interesse = c(1, 3, 5),
-  M = 100,
-  prop_n0 = 0.3,
-  prop_n1 = 0.7
-)
+  M = 1,
+  prop_n0 = 0.4,
+  prop_n1 = 0.6
+))
 
 # Testes
 t1 <- 5
-t2 <-  10
-p1_1 <- 0.6011338
-p2_1 <- 0.5440756
-p1_2 <- 0.5138367
-p2_2 <- 0.4321000
+t2 <-  20
+vetor_p1 = c(0.8319006, 0.7201794)
+vetor_p2 = c(0.7382254, 0.5685534)
+# shape0 <- 30
+# scale0 <- 300
+# shape1 <- 20
+# scale1 <- 200
 seed <- 803
 p_cens <- c(0.7)
 n <- c(500)
 tempo <- c(3)
 M <- 50
-prop_n0 <- 0.3
-prop_n1 <- 0.7
+prop_n0 <- 0.4
+prop_n1 <- 0.6
 
 
