@@ -26,7 +26,7 @@ header-includes:
 knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, error = FALSE)
 ```
 
-This document aims to present supplementary results that are referenced throughout the main text of the article “Machine learning survival models for colorectal cancer: Advantages of Random Survival Forests over classification algorithms”. Additionaly, all scripts used and the resulting outputs can be found at [this GitHub repository](https://github.com/RafaHerzog/article_colorectal_cancer).
+This document aims to present supplementary results that are referenced throughout the main text of the article “Machine learning survival models for colorectal cancer: Advantages of Random Survival Forests over classification algorithms”. Additionaly, all scripts used and the resulting outputs can be found at [this GitHub repository](https://github.com/RafaHerzog/article_colorectal_cancer/tree/main).
 
 ```{r echo=FALSE}
 # Creating a list of required packages
