@@ -1,0 +1,499 @@
+---
+title: 'Supplementary material - Machine learning survival models for colorectal cancer: Advantages of Random Survival Forests over classification algorithms'
+author: "Rafael Sant'Ana Herzog"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    pandoc_args: ["--variable", "urlcolor=blue"]
+    latex_engine: xelatex
+    number_sections: true     
+    toc: false 
+bibliography: bibliography.bib
+link-citations: true
+header-includes:
+  - \usepackage{caption}
+  - \captionsetup[table]{labelfont=bf}
+  - \captionsetup[figure]{labelfont=bf}
+  - \usepackage{tabularx}
+  - \usepackage{multirow}
+  - \usepackage{makecell}
+  - \AtBeginEnvironment{Shaded}{\small}
+  - \usepackage{float}
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, error = FALSE)
+```
+
+This document aims to present supplementary results that are referenced throughout the main text of the article “Machine learning survival models for colorectal cancer: Advantages of Random Survival Forests over classification algorithms”. Additionaly, all scripts used and the resulting outputs can be found at [this GitHub repository](https://github.com/RafaHerzog/article_colorectal_cancer).
+
+```{r echo=FALSE}
+# Creating a list of required packages
+packages <- c(
+  "dplyr", "janitor", "glue", "purrr", "rlang", "tidyr", "survival", "survminer",
+  "patchwork", "randomForestSRC", "caret", "survex", "ranger", "tuneRanger", 
+  "fastshap", "parallel", "doParallel", "shapviz", "treeshap", "ggplot2",
+  "knitr", "kableExtra"
+)
+
+# Installing missing packages and importing them
+for (pkg in packages) {
+  if (!suppressPackageStartupMessages(require(pkg, character.only = TRUE))) {
+    install.packages(pkg, dependencies = TRUE)
+    suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+  }
+}
+```
+
+# Excluded covariates
+
+As stated in the main text of the article, ten of the 25 covariates used by @buk:2023 were excluded from the analysis. Specifically, the following variables were removed:
+
+- `IBGE` and `IBGEATEN`, which represented, respectively, the “IBGE code of the patient's city of residence” and the “IBGE code of the institution”;
+
+- `TRATHOSP`, which represented the “combination code of treatments carried out at the hospital”, but was a combination of other treatment variables already involved in the analysis;
+
+- `NONE`, which represented “treatment received in hospital = none (0 = no and 1 = yes)”, but had very few observations in category 1 (only 0.3\%);
+
+- `TMO`, which represented “treatment received in hospital = tmo (0 = no and 1 = yes)”, but had only one observation in category 1;
+
+- `IMUNO`, which represented “treatment received in hospital = immunotherapy (0 = no and 1 = yes)”, but had very few observations in category 1 (only 0.1\%);
+
+- `NENHUMANT`, which represented “treatment received outside hospital and before admission = none (0 = no and 1 = yes)”, but had very few observations in category 0 (less than 0.1\%);
+
+- `CONSDIAG`, which represented the “difference in days between the dates of consultation and diagnosis”, but had negative values;
+
+- and `RRAS` and `DRS`, which represented, respectively, the “Regional Health Care Network code” and the “Regional Health Department code”.
+
+
+# Characteristics of the population in the total, training, and test datasets
+
+```{r echo=FALSE}
+# Reading the data and cleaning variable names
+data_aux <- read.csv("dataset_clean.csv") |>
+  clean_names()
+
+# Helper function to convert 0/1 variables to "No"/"Yes"
+bin_to_factor_en <- function(x) {
+  factor(case_when(
+    x == 0 ~ "No",
+    x == 1 ~ "Yes"
+  ), levels = c("No", "Yes"))
+}
+
+# Recoding categorical variables
+data_aux <- data_aux |>
+  mutate(
+    sexo = factor(case_when(
+      sexo == 1 ~ "Male",
+      sexo == 2 ~ "Female"
+    ), levels = c("Male", "Female")),
+    
+    cateatend = factor(case_when(
+      cateatend %in% c(1, 3) ~ "Agreement or Private Healthcare",
+      cateatend == 2 ~ "Public Healthcare",
+      cateatend == 9 ~ "No information"
+    ), levels = c("Agreement or Private Healthcare", "Public Healthcare", "No information")),
+    
+    diagprev = factor(case_when(
+      diagprev == 1 ~ "No diagnosis / No treatment",
+      diagprev == 2 ~ "With diagnosis / No treatment"
+    ), levels = c("No diagnosis / No treatment", "With diagnosis / No treatment")),
+    
+    ecgrup = factor(ecgrup),
+    
+    cirurgia = bin_to_factor_en(cirurgia),
+    hormonio = bin_to_factor_en(hormonio),
+    quimio = bin_to_factor_en(quimio),
+    radio = bin_to_factor_en(radio),
+    outros = bin_to_factor_en(outros),
+    
+    recorrencia = factor(case_when(
+      recnenhum == 1 ~ "No",
+      recnenhum == 0 ~ "Yes"
+    ), levels = c("No", "Yes")),
+    
+    escolari_2 = factor(case_when(
+      escolari_2 == 1 ~ "Illiterate",
+      escolari_2 == 2 ~ "Incomplete Primary Education",
+      escolari_2 == 3 ~ "Complete Primary Education",
+      escolari_2 == 4 ~ "High School",
+      escolari_2 == 5 ~ "Higher Education"
+    ), levels = c(
+      "Illiterate", "Incomplete Primary Education", "Complete Primary Education", "High School", "Higher Education"
+    )),
+    
+    idade_cat = factor(case_when(
+      idade <= 49 ~ "0 to 49 years",
+      idade >= 50 & idade <= 74 ~ "50 to 74 years",
+      idade >= 75 ~ "\U2265 75 years"
+    ), levels = c("0 to 49 years", "50 to 74 years", "\U2265 75 years")),
+    
+    tratcons_cat = factor(case_when(
+      tratcons <= 60 ~ "\U2264 60 days",
+      tratcons > 60 ~ "> 60 days"
+    ), levels = c("\U2264 60 days", "> 60 days"))
+  ) |>
+  select(
+    time_years, event = status_cancer_specific, anodiag, cateatend, cirurgia,
+    diagprev, diagtrat, ecgrup, escolari_2, hormonio, idade_cat, outros,
+    quimio, radio, recorrencia, sexo, tratcons_cat
+  )
+
+# Finding optimal cut-off points for anodiag and diagtrat using the maxstat package
+cutpoints <- surv_cutpoint(
+  data_aux,
+  time = "time_years",
+  event = "event",
+  c("anodiag", "diagtrat"),
+  minprop = 0.2
+)
+
+# Adding the new categorizations to the original dataframe
+data <- data_aux |>
+  mutate(
+    anodiag_cat = factor(
+      ifelse(
+        anodiag <= as.numeric(cutpoints$anodiag$estimate),
+        glue("\U2264 {as.numeric(cutpoints$anodiag$estimate)}"),
+        glue("> {as.numeric(cutpoints$anodiag$estimate)}")
+      ),
+      levels = c(
+        glue("\U2264 {as.numeric(cutpoints$anodiag$estimate)}"),
+        glue("> {as.numeric(cutpoints$anodiag$estimate)}")
+      )
+    ),
+    .after = "anodiag"
+  ) |>
+  mutate( 
+    diagtrat_cat = factor(
+      ifelse(
+        diagtrat <= as.numeric(cutpoints$diagtrat$estimate),
+        glue("\U2264 {as.numeric(cutpoints$diagtrat$estimate)} days"),
+        glue("> {as.numeric(cutpoints$diagtrat$estimate)} days")
+      ),
+      levels = c(
+        glue("\U2264 {as.numeric(cutpoints$diagtrat$estimate)} days"),
+        glue("> {as.numeric(cutpoints$diagtrat$estimate)} days")
+      )
+    ),
+    .after = "diagtrat"
+  ) |>
+  select(!c(anodiag, diagtrat))
+
+rm(cutpoints)
+
+# Creating training and test samples
+set.seed(428)
+lines_train <- createDataPartition(
+  data$event,
+  p = 0.7, 
+  list = FALSE,
+  times = 1
+)
+data_train <- data[lines_train, ]
+data_test <- data[-lines_train, ]
+```
+
+The proportion of events was approximately the same across all total, train (70%) and test (30%) datasets, as shown in \textbf{Table \ref{tab:events}}.
+
+```{r echo=FALSE, results='asis'}
+props_total <- prop.table(table(data[["event"]]))
+props_train <- prop.table(table(data_train[["event"]]))
+props_test <- prop.table(table(data_test[["event"]]))
+
+linhas <- paste0(
+  names(props_total), " & ",
+  round(as.numeric(props_total), 3), " & ",
+  round(as.numeric(props_train), 3), " & ",
+  round(as.numeric(props_test), 3), " \\\\ \n"
+)
+
+cat("\\begin{table}[hbt!]
+\\centering
+\\begin{tabular}{c|c|c|c}
+\\hline
+\\multirow{2}{*}{\\textbf{Event status}} & \\multicolumn{3}{c}{\\textbf{Proportion}} \\\\ \\cline{2-4}
+& \\textbf{Total dataset} & \\textbf{Train} & \\textbf{Test} \\\\ \\hline
+")
+cat(linhas)
+cat("\\hline
+\\end{tabular}
+\\caption{Proportion of events (failures) in the total, train, and test datasets.}
+\\label{tab:events}
+\\end{table}"
+)
+```
+
+\newpage
+
+The nonparametric estimated median survival time and the survival probabilities at 1, 3, and 5 years, presented in \textbf{Table \ref{tab:survival_estimates}}, were also roughly the same across the three datasets. 
+
+```{r echo=FALSE}
+gera_tabela_surv_latex <- function(data_total, data_train, data_test,
+                                   time_col = "time_years", event_col = "event") {
+  library(survival)
+  library(dplyr)
+  
+  # Função interna para extrair median e tempos específicos
+  extract_surv <- function(data, times = c(1, 3, 5)) {
+    fit <- survfit(Surv(data[[time_col]], data[[event_col]]) ~ 1)
+    
+    # Mediana
+    median_val <- summary(fit)$table["median"]
+    median_ci  <- summary(fit)$table[c("0.95LCL","0.95UCL")]
+    median_str <- paste0(round(median_val,2), " (95\\% CI: ", round(median_ci[1],2), "–", round(median_ci[2],2), ")")
+    
+    # Probabilidades nos tempos
+    probs <- summary(fit, times = times)
+    prob_str <- paste0(round(probs$surv,3), " (95\\% CI: ", round(probs$lower,3), "–", round(probs$upper,3), ")")
+    
+    c(Median = median_str,
+      "1 year" = prob_str[1],
+      "3 years" = prob_str[2],
+      "5 years" = prob_str[3])
+  }
+  
+  # Extrai para cada dataset
+  est_total <- extract_surv(data_total)
+  est_train <- extract_surv(data_train)
+  est_test  <- extract_surv(data_test)
+  
+  # Monta linhas da tabela
+  linhas <- paste0(
+    names(est_total), " & ",
+    est_total, " & ", est_train, " & ", est_test, " \\\\ \n"
+  )
+  
+  # Imprime LaTeX
+  cat("\\begin{table}[hbt!]
+\\centering
+\\begin{tabular}{c|c|c|c}
+\\hline
+\\multirow{2}{*}{\\textbf{Time}} & \\multicolumn{3}{c}{\\textbf{Estimate}} \\\\ \\cline{2-4}
+                               & \\textbf{Total dataset} & \\textbf{Train} & \\textbf{Test} \\\\ \\hline
+")
+  cat(linhas)
+  cat("\\hline
+\\end{tabular}
+\\caption{Estimated median survival and survival probabilities at 1, 3, and 5 years for the total, train, and test datasets.}
+\\label{tab:survival_estimates}
+\\end{table}")
+}
+```
+
+
+```{r echo=FALSE}
+data_train <- data[lines_train, ]
+data_test <- data[-lines_train, ]
+```
+
+```{r results='asis', echo=FALSE}
+gera_tabela_surv_latex(data, data_train, data_test)
+```
+
+Frequency distributions and log-rank test results for each covariate and dataset are summarized in \textbf{Table \ref{tab:distribution_variables_expanded}}. As shown, the percentages of each variable’s categories are roughly the same across the three datasets. The only differences in significance in the log-rank test were observed for the radiotherapy and hormone therapy variables.
+
+
+```{r echo=FALSE}
+# Função para resumir uma variável em três datasets
+resume_var_expanded <- function(var, data_total, data_train, data_test,
+                             time_col = "time_years", event_col = "event") {
+  var_sym <- sym(var)
+  
+  # Função interna para contar e calcular %
+  tab_one <- function(data) {
+    total <- nrow(data)
+    levelsVec <- levels(data[[var]])
+    tibble(category = as.character(levelsVec)) |>
+      left_join(
+        data |> count(!!var_sym) |> mutate(category = as.character(!!var_sym)) |> select(category, n),
+        by = "category"
+      ) |>
+      mutate(
+        n = replace_na(n, 0L),
+        perc = 100 * n / total
+      )
+  }
+  
+  tab_total <- tab_one(data_total)
+  tab_train <- tab_one(data_train)
+  tab_test  <- tab_one(data_test)
+  
+  # Log-rank test em cada dataset
+  fmla <- as.formula(paste0("Surv(", time_col, ", ", event_col, ") ~ `", var, "`"))
+  pval_total <- 1 - pchisq(survdiff(fmla, data = data_total)$chisq,
+                           length(levels(data_total[[var]])) - 1)
+  pval_train <- 1 - pchisq(survdiff(fmla, data = data_train)$chisq,
+                           length(levels(data_train[[var]])) - 1)
+  pval_test <- 1 - pchisq(survdiff(fmla, data = data_test)$chisq,
+                          length(levels(data_test[[var]])) - 1)
+  
+  format_p <- function(p) if (p < 0.0001) "< 0.0001" else sprintf("%.4f", p)
+  
+  # Criar tabela final com percentuais e p-values
+  tab_total |>
+    mutate(
+      Variable = replace(rep("", n()), 1, var),
+      perc_total = paste0(round(perc, 1), "%"),
+      perc_train = paste0(round(tab_train$perc, 1), "%"),
+      perc_test  = paste0(round(tab_test$perc, 1), "%"),
+      p_total = replace(rep("", n()), 1, format_p(pval_total)),
+      p_train = replace(rep("", n()), 1, format_p(pval_train)),
+      p_test  = replace(rep("", n()), 1, format_p(pval_test))
+    ) |>
+    select(Variable, category, perc_total, perc_train, perc_test,
+                  p_total, p_train, p_test)
+}
+
+vars <- c(
+  "escolari_2", "idade_cat", "sexo", "cateatend", "diagprev", "ecgrup",
+  "cirurgia", "radio", "quimio", "hormonio", "outros", "tratcons_cat",
+  "diagtrat_cat", "anodiag_cat", "recorrencia"
+)
+
+tabela_resumo <- map_dfr(vars,
+  ~ resume_var_expanded(.x, data, data_train, data_test)
+)
+
+```
+
+```{r echo=FALSE}
+gera_tabela_latex_expanded <- function(tab) {
+  # Função auxiliar para escapar caracteres especiais
+  escape_latex <- function(x) {
+    x <- gsub("_", "\\\\_", x)
+    x <- gsub("%", "\\\\%", x)
+    x <- gsub(">", "\\\\textgreater", x)
+    x <- gsub("<", "\\\\textless", x)
+    x <- gsub("≥", "\\$\\\\geq\\$", x)
+    x <- gsub("≤", "\\$\\\\leq\\$", x)
+    x
+  }
+
+  # Escapando os valores
+  tab <- tab |>
+    mutate(
+      Variable = escape_latex(Variable),
+      category = escape_latex(category),
+      perc_total = escape_latex(perc_total),
+      perc_train = escape_latex(perc_train),
+      perc_test  = escape_latex(perc_test),
+      p_total = escape_latex(p_total),
+      p_train = escape_latex(p_train),
+      p_test  = escape_latex(p_test)
+    )
+
+  # Nomes “bonitos” das variáveis
+  tab <- tab |>
+    mutate(
+      Variable_nice = case_when(
+        Variable == "escolari\\_2" ~ "Education level",
+        Variable == "idade\\_cat" ~ "Age group",
+        Variable == "sexo" ~ "Sex",
+        Variable == "cateatend" ~ "\\makecell{Diagnostic care\\\\category}",
+        Variable == "diagprev" ~ "\\makecell{Previous diagnosis\\\\and treatment}",
+        Variable == "ecgrup" ~ "\\makecell{Clinical staging\\\\group}",
+        Variable == "cirurgia" ~ "\\makecell{Treatment received in \\\\hospital: surgery}",
+        Variable == "radio" ~ "\\makecell{Treatment received in \\\\hospital: radiotherapy}",
+        Variable == "quimio" ~ "\\makecell{Treatment received in \\\\hospital: chemotherapy}",
+        Variable == "hormonio" ~ "\\makecell{Treatment received in \\\\hospital: hormone therapy}",
+        Variable == "outros" ~ "\\makecell{Treatment received in \\\\hospital: others}",
+        Variable == "tratcons\\_cat" ~ "\\makecell{Time between\\\\consultation and treatment}",
+        Variable == "diagtrat\\_cat" ~ "\\makecell{Time between\\\\diagnosis and treatment}",
+        Variable == "anodiag\\_cat" ~ "Year of diagnosis",
+        Variable == "recorrencia" ~ "Recurrence",
+        TRUE ~ Variable
+      )
+    )
+
+  # Construindo linhas com \multirow e \hline
+  linhas <- tab |>
+    mutate(Variable_fill = ifelse(Variable_nice == "", NA, Variable_nice)) |>
+    fill(Variable_fill) |>
+    group_by(Variable_fill) |>
+    mutate(
+      n_cat = n(),
+      linha = paste0(
+        ifelse(row_number() == 1,
+               ifelse(n_cat > 1,
+                      paste0("\\multirow{", n_cat, "}{*}{", Variable_fill, "} & "),
+                      paste0(Variable_fill, " & ")
+               ),
+               " & "
+        ),
+        category, " & ", perc_total, " & ", perc_train, " & ", perc_test, " & ",
+        ifelse(row_number() == 1,
+               ifelse(n_cat > 1,
+                      paste0("\\multirow{", n_cat, "}{*}{", p_total, "} & ",
+                             "\\multirow{", n_cat, "}{*}{", p_train, "} & ",
+                             "\\multirow{", n_cat, "}{*}{", p_test, "}"),
+                      paste0(p_total, " & ", p_train, " & ", p_test)
+               ),
+               " & & "
+        ),
+        " \\\\",
+        ifelse(row_number() == n_cat, " \\hline", "")
+      )
+    ) |>
+    ungroup() |>
+    pull(linha)
+
+  # Imprimindo a tabela completa com cabeçalho centralizado
+  cat("
+\\begin{table}[hbt!]
+\\centering
+\\begin{tabularx}{\\textwidth}{c|X|ccc|ccc}
+\\hline
+\\multirow{2}{*}{\\textbf{Variable}} & \\multirow{2}{*}{\\textbf{Categories}} & \\multicolumn{3}{c|}{\\textbf{\\%}} & \\multicolumn{3}{c}{\\textbf{P-value (Log-rank)}} \\\\ \\cline{3-8}
+                                    &                                      & \\textbf{Total} & \\textbf{Train} & \\textbf{Test} & \\textbf{Total} & \\textbf{Train} & \\textbf{Test} \\\\ \\hline
+")
+  cat(paste(linhas, collapse = "\n"))
+  cat("
+\\end{tabularx}
+\\caption{Percentages and log-rank test results for each variable in total, train, and test datasets.}
+\\label{tab:distribution_variables_expanded}
+\\end{table}
+")
+}
+
+```
+
+```{r results='asis', echo=FALSE}
+gera_tabela_latex_expanded(tabela_resumo)
+```
+
+\newpage
+
+# Additional context on the simulation study
+
+To incorporate random censoring in the simulation study performed, censoring times were drawn from a uniform distribution over the interval $(0, \theta_h)$, for $h = 0, 1$. The value of $\theta_h$ was determined to achieve a desired right-censoring proportion $p_c$, by solving $P(T_h > C_h) = p_c$, where $T_h$ and $C_h$ denote failure and censoring times, respectively.
+
+The survival behaviors of clinical stages I and II were specifically used as a basis because they ensured that all resulting $\theta_h$ values exceeded 5 — the longest time of interest in this study — across all evaluated scenarios. This guaranteed that censoring could occur throughout the entire follow-up period, allowing for a realistic distribution of censored observations.
+
+The $\theta_h$ values obtained for each censoring probability and predictor are presented in \textbf{Table \ref{tab:tabela_theta}}.
+
+```{r tabela_theta, echo=FALSE}
+# Creating the data frame with rounded values
+tabela_df <- data.frame(
+  "Theta / Censoring probability" = c("Related to predictor x = 0", "Related to predictor x = 1"),
+  "0.25" = c("908.873", "242.288"),
+  "0.40" = c("354.887", "97.841"),
+  "0.50" = c("192.396", "54.306"),
+  "0.60" = c("99.668", "28.878"),
+  "0.70" = c("46.437", "13.880"),
+  check.names = FALSE
+)
+
+# Displaying the formatted table
+kable(
+  tabela_df,
+  digits = 3,
+  align = "c",
+  caption = "Values of theta for each censoring probability and predictor. \\label{tab:tabela_theta}"
+)
+```
+
+# References
+
