@@ -136,10 +136,10 @@ cria_categorias <- function(df) {
       ),
       anodiag_cat = relevel(anodiag_cat, "apos_2006"),
       diagtrat_cat = factor(
-        ifelse(diagtrat <= cut_diagtrat, "ate_84", "apos_84"),
-        levels = c("ate_84", "apos_84")
+        ifelse(diagtrat <= cut_diagtrat, "ate_78", "apos_78"),
+        levels = c("ate_78", "apos_78")
       ),
-      diagtrat_cat = relevel(diagtrat_cat, "ate_84")
+      diagtrat_cat = relevel(diagtrat_cat, "ate_78")
     ) |>
     select(!c(anodiag, diagtrat))
 }
@@ -295,12 +295,10 @@ names(fit_split4$variable.importance)
 
 ## Correcting the variable names
 names(fit_split4$variable.importance) <- c(
-  "Year of diagnosis: ≤ 2006",
   "Diagnostic care category: Public Healthcare",
   "Diagnostic care category: No information",
   "Surgery: No",
   "Previous diagnosis/treatment: No/No",
-  "Time between treatment and diagnosis: > 81 days",
   "Clinical staging group - II: Yes",
   "Clinical staging group - III: Yes",
   "Clinical staging group - IV: Yes",
@@ -316,7 +314,9 @@ names(fit_split4$variable.importance) <- c(
   "Radiotherapy: Yes",
   "Recurrence: Yes",
   "Sex: Male",
-  "Time between treatment and consultation: ≤ 60 days"
+  "Time between treatment and consultation: ≤ 60 days",
+  "Year of diagnosis: ≤ 2006",
+  "Time between treatment and diagnosis: > 78 days"
 )
 
 ## Creating a dataframe with the VIMP of each variable
