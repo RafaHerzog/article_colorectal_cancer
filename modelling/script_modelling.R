@@ -54,10 +54,10 @@ data_aux <- read.csv("dataset_clean.csv") |>
       outros == 0 ~ "nao",
       outros == 1 ~ "sim"
     ), levels = c("nao", "sim")),
-    recorrencia = factor(case_when(
-      recnenhum == 1 ~ "nao",
-      recnenhum == 0 ~ "sim"
-    ), levels = c("nao", "sim")),
+    recnenhum = factor(case_when(
+      recnenhum == 1 ~ "sim",
+      recnenhum == 0 ~ "nao"
+    ), levels = c("sim", "nao")),
     escolari_2 = factor(case_when(
       escolari_2 == 1 ~ "analfabeto",
       escolari_2 == 2 ~ "ens_fund_incompleto",
@@ -75,46 +75,10 @@ data_aux <- read.csv("dataset_clean.csv") |>
       tratcons > 60 ~ "mais_de_60_dias"
     ), levels = c("ate_60_dias", "mais_de_60_dias"))
   ) |>
-  select(
-    time_years, falha = status_cancer_specific, anodiag, cateatend, cirurgia,
-    diagprev, diagtrat, ecgrup, escolari_2, hormonio, idade_cat, outros,
-    quimio, radio, recorrencia, sexo, tratcons_cat
-  )
-
-## Finding optimal cut-off points for anodiag and diagtrat using the maxstat package
-cutpoints <- surv_cutpoint(
-  data_aux,
-  time = "time_years",
-  event = "falha",
-  c("anodiag", "diagtrat"),
-  minprop = 0.2
-)
-
-cutpoints
-
-## Adding the new categorizations to the original dataframe
-data <- data_aux |>
   mutate(
-    anodiag_cat = factor(
-      ifelse(anodiag <= 2006, "ate_2006", "apos_2006"),
-      levels = c("ate_2006", "apos_2006")
-    ),
-    .after = "anodiag"
-  ) |>
-  mutate( 
-    diagtrat_cat = factor(
-      ifelse(diagtrat <= 81, "ate_81_dias", "mais_de_81_dias"),
-      levels = c("ate_81_dias", "mais_de_81_dias")
-    ),
-    .after = "diagtrat"
-  ) |>
-  select(!c(anodiag, diagtrat)) |>
-  mutate(
-    anodiag_cat = relevel(anodiag_cat, "apos_2006"),
     cateatend = relevel(cateatend, "convenio_ou_particular"),
     cirurgia = relevel(cirurgia, "sim"),
     diagprev = relevel(diagprev, "com_diag_e_sem_trat"),
-    diagtrat_cat = relevel(diagtrat_cat, "ate_81_dias"),
     ecgrup = relevel(ecgrup, "I"),
     escolari_2 = relevel(escolari_2, "ens_superior"),
     hormonio = relevel(hormonio, "sim"),
@@ -122,32 +86,79 @@ data <- data_aux |>
     outros = relevel(outros, "sim"),
     quimio = relevel(quimio, "nao"),
     radio = relevel(radio, "nao"),
-    recorrencia = relevel(recorrencia, "nao"),
+    recnenhum = relevel(recnenhum, "sim"),
     sexo = relevel(sexo, "fem"),
     tratcons_cat = relevel(tratcons_cat, "mais_de_60_dias")
-  ) 
-
-rm(cutpoints, data_aux)
-
-## Transforming all categorical variables into dummies
-data_dummies <- cbind(
-  data |> select(time_years, falha),
-  as.data.frame(model.matrix(~., data = data |> select(!c(time_years, falha)) |> rename_all(~ paste0(., "_")))) |> select(!`(Intercept)`)
-)
+  ) |>
+  select(
+    time_years, falha = status_cancer_specific, anodiag, cateatend, cirurgia,
+    diagprev, diagtrat, ecgrup, escolari_2, hormonio, idade_cat, outros,
+    quimio, radio, recnenhum, sexo, tratcons_cat
+  )
 
 ## Creating training and test samples
-set.seed(428)
-linhas_train <- createDataPartition(
-  data_dummies$falha,
-  p = 0.7, 
-  list = FALSE,
-  times = 1
-)
-data_train <- data_dummies[linhas_train, ]
-data_test <- data_dummies[-linhas_train, ]
+set.seed(2406)
 
-prop.table(table(data_train$falha))
-prop.table(table(data_test$falha))
+linhas_train <- createDataPartition(
+  data_aux$falha,
+  p = 0.7,
+  list = FALSE
+)
+
+data_train_aux <- data_aux[linhas_train, ]
+data_test_aux <- data_aux[-linhas_train, ]
+
+prop.table(table(data_train_aux$falha))
+prop.table(table(data_test_aux$falha))
+
+## Finding optimal cut-off points for anodiag and diagtrat using the maxstat package
+cutpoints <- surv_cutpoint(
+  data_train_aux,
+  time = "time_years",
+  event = "falha",
+  variables = c("anodiag", "diagtrat"),
+  minprop = 0.2
+)
+
+cutpoints
+
+cut_anodiag <- cutpoints$cutpoint["anodiag", "cutpoint"]
+cut_diagtrat <- cutpoints$cutpoint["diagtrat", "cutpoint"]
+
+## Adding the new categorizations to the original dataframes
+cria_categorias <- function(df) {
+  
+  df |>
+    mutate(
+      anodiag_cat = factor(
+        ifelse(anodiag <= cut_anodiag, "ate_2006", "apos_2006"),
+        levels = c("ate_2006", "apos_2006")
+      ),
+      anodiag_cat = relevel(anodiag_cat, "apos_2006"),
+      diagtrat_cat = factor(
+        ifelse(diagtrat <= cut_diagtrat, "ate_84", "apos_84"),
+        levels = c("ate_84", "apos_84")
+      ),
+      diagtrat_cat = relevel(diagtrat_cat, "ate_84")
+    ) |>
+    select(!c(anodiag, diagtrat))
+}
+
+data_train_aux <- cria_categorias(data_train_aux)
+data_test_aux <- cria_categorias(data_test_aux)
+
+## Transforming all categorical variables into dummies
+data_train <- cbind(
+  data_train_aux |> select(time_years, falha),
+  as.data.frame(model.matrix(~., data = data_train_aux |> select(!c(time_years, falha)) |> rename_all(~ paste0(., "_")))) |> select(!`(Intercept)`)
+)
+
+data_test <- cbind(
+  data_test_aux |> select(time_years, falha),
+  as.data.frame(model.matrix(~., data = data_test_aux |> select(!c(time_years, falha)) |> rename_all(~ paste0(., "_")))) |> select(!`(Intercept)`)
+)
+
+rm(cutpoints, cut_anodiag, cut_diagtrat, data_test_aux, data_train_aux, linhas_train, cria_categorias)
 
 ## Importing auxiliary functions
 source("auxiliary_modelling_functions.R")
@@ -160,7 +171,7 @@ splitrules <- c("logrank", "bs.gradient", "logrankscore", "C", "maxstat", "extra
 ### Creating a helper function to tune and save results
 tune_save <- function(idx, splitrules, data, path = "r_objects/") {
   splitrule <- splitrules[idx]
-  set.seed(428)
+  set.seed(2406)
   
   # Selecting the tuning function according to the splitrule
   fit_tune <- if (splitrule %in% c("logrank", "bs.gradient", "logrankscore")) {
@@ -197,7 +208,7 @@ fit_save_model <- function(idx, splitrules, data, path = "r_objects/") {
   tune_file <- paste0(path, "fit_tune_split", idx, ".RDS")
   fit_tune <- readRDS(tune_file)
   
-  set.seed(428)
+  set.seed(2406)
   
   # Fitting the model
   fit <- if (splitrule %in% c("logrank", "bs.gradient", "logrankscore")) {
@@ -217,7 +228,7 @@ fit_save_model <- function(idx, splitrules, data, path = "r_objects/") {
       replace = FALSE,
       num.threads = 8,
       splitrule = splitrule,
-      importance = ifelse(splitrule == "C", "permutation", NULL),
+      importance = ifelse(splitrule == "C", "permutation", "none"),
       respect.unordered.factors = FALSE,
       save.memory = TRUE
     )
@@ -335,12 +346,12 @@ ggsave(filename = "figures/vimps_complete_model.jpg", width = 10, height = 6, dp
 
 
 ## Fitting the models by removing one variable at a time ----------------------
-variaveis <- c("completo", names(data |> select(!c(time_years, falha))))
+variaveis <- c("completo", names(data_aux |> select(!c(time_years, falha))))
 df_performance_variables <- data.frame()
 fit_tune_split4 <- readRDS("r_objects/fit_tune_split4.RDS")
 
 for (variavel in variaveis) {
-  set.seed(428)
+  set.seed(2406)
   fit_sem_variaveis <- ranger(
     Surv(time_years, falha) ~ .,  data = data_train |> select(!starts_with(variavel)), 
     mtry = fit_tune_split4$optimal[2], min.node.size = fit_tune_split4$optimal[1],
@@ -366,9 +377,10 @@ for (variavel in variaveis) {
 df_performance_variables |> 
   rename(model = variavel) |>
   mutate(
-    error = round(error, 3),
+    error = round(1 - error, 3),
     ibs = round(ibs, 3)
-  )
+  ) |>
+  rename(cindex = error)
 
 
 ## Tuning the hyperparameters of the reduced model ---------------------------
@@ -376,21 +388,27 @@ df_performance_variables |>
 data_train_final <- data_train |> 
   select(
     !c(
-      starts_with("anodiag"), starts_with("sexo"), 
-      starts_with("hormonio"), starts_with("tratcons"), 
-      starts_with("diagtrat"))
+      starts_with("anodiag"), 
+      starts_with("diagtrat"),
+      starts_with("hormonio"),
+      starts_with("sexo"),
+      starts_with("tratcons")
+      )
     )
 
 data_test_final <- data_test |> 
   select(
     !c(
-      starts_with("anodiag"), starts_with("sexo"), 
-      starts_with("hormonio"), starts_with("tratcons"), 
-      starts_with("diagtrat"))
+      starts_with("anodiag"), 
+      starts_with("diagtrat"),
+      starts_with("hormonio"),
+      starts_with("sexo"),
+      starts_with("tratcons")
+    )
   )
 
 ### Tuning the hyperparameters of the reduced model
-set.seed(428)
+set.seed(2406)
 fit_tune_final <- tune_ranger(
   Surv(time_years, falha) ~ ., 
   data = data_train_final, 
@@ -402,7 +420,7 @@ saveRDS(fit_tune_final, "r_objects/fit_tune_final.RDS")
 
 ## Fitting the reduced model ------------------------------------------------
 fit_tune_final <- readRDS("r_objects/fit_tune_final.RDS")
-set.seed(428)
+set.seed(2406)
 fit_final <- ranger(
   Surv(time_years, falha) ~ .,
   data = data_train_final, 
@@ -418,7 +436,7 @@ gc()
 
 
 ## Evaluating the predictive performance---------------------------------------
-set.seed(428)
+set.seed(2406)
 pred_fit_final <- predict(
   readRDS("r_objects/fit_final.RDS"), 
   data_test_final,
@@ -427,6 +445,17 @@ pred_fit_final <- predict(
 
 saveRDS(pred_fit_final, "r_objects/pred_fit_final.RDS")
 rm(pred_fit_final)
+gc()
+
+set.seed(2406)
+pred_fit_split4 <- predict(
+  readRDS("r_objects/fit_split4.RDS"), 
+  data_test,
+  num.threads = parallel::detectCores(), save.memory = TRUE
+)
+
+saveRDS(pred_fit_split4, "r_objects/pred_fit_split4.RDS")
+rm(pred_fit_split4)
 gc()
 
 ## Table with the results --------------------------------------------------
@@ -475,7 +504,7 @@ unified_model <- ranger_surv.unify(
 gc()
 
 ## Computing SHAP values using the TreeSHAP algorithm on the test set
-set.seed(428)
+set.seed(2406)
 shap_treeshap_final <- treeshap(
   unified_model,
   data_test_final

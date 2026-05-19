@@ -141,59 +141,68 @@ data_aux <- data_aux |>
     quimio, radio, recorrencia, sexo, tratcons_cat
   )
 
-# Finding optimal cut-off points for anodiag and diagtrat using the maxstat package
+## Creating training and test samples
+set.seed(2406)
+
+linhas_train <- createDataPartition(
+  data_aux$event,
+  p = 0.7,
+  list = FALSE
+)
+
+data_train_aux <- data_aux[linhas_train, ]
+data_test_aux <- data_aux[-linhas_train, ]
+
+## Finding optimal cut-off points for anodiag and diagtrat using the maxstat package
 cutpoints <- surv_cutpoint(
-  data_aux,
+  data_train_aux,
   time = "time_years",
   event = "event",
-  c("anodiag", "diagtrat"),
+  variables = c("anodiag", "diagtrat"),
   minprop = 0.2
 )
 
+cut_anodiag <- cutpoints$cutpoint["anodiag", "cutpoint"]
+cut_diagtrat <- cutpoints$cutpoint["diagtrat", "cutpoint"]
+
 # Adding the new categorizations to the original dataframe
-data <- data_aux |>
-  mutate(
-    anodiag_cat = factor(
-      ifelse(
-        anodiag <= as.numeric(cutpoints$anodiag$estimate),
-        glue("\U2264 {as.numeric(cutpoints$anodiag$estimate)}"),
-        glue("> {as.numeric(cutpoints$anodiag$estimate)}")
+cria_categorias <- function(df) {
+  
+  df |>
+    mutate(
+      anodiag_cat = factor(
+        ifelse(
+          anodiag <= cut_anodiag,
+          glue("\U2264 {as.numeric(cutpoints$anodiag$estimate)}"),
+          glue("> {as.numeric(cutpoints$anodiag$estimate)}")
+        ),
+        levels = c(
+          glue("\U2264 {as.numeric(cutpoints$anodiag$estimate)}"),
+          glue("> {as.numeric(cutpoints$anodiag$estimate)}")
+        )
       ),
-      levels = c(
-        glue("\U2264 {as.numeric(cutpoints$anodiag$estimate)}"),
-        glue("> {as.numeric(cutpoints$anodiag$estimate)}")
-      )
-    ),
-    .after = "anodiag"
-  ) |>
-  mutate( 
-    diagtrat_cat = factor(
-      ifelse(
-        diagtrat <= as.numeric(cutpoints$diagtrat$estimate),
-        glue("\U2264 {as.numeric(cutpoints$diagtrat$estimate)} days"),
-        glue("> {as.numeric(cutpoints$diagtrat$estimate)} days")
+      .after = "anodiag"
+    ) |>
+    mutate(
+      diagtrat_cat = factor(
+        ifelse(
+          diagtrat <= cut_diagtrat,
+          glue("\U2264 {as.numeric(cutpoints$diagtrat$estimate)} days"),
+          glue("> {as.numeric(cutpoints$diagtrat$estimate)} days")
+        ),
+        levels = c(
+          glue("\U2264 {as.numeric(cutpoints$diagtrat$estimate)} days"),
+          glue("> {as.numeric(cutpoints$diagtrat$estimate)} days")
+        )
       ),
-      levels = c(
-        glue("\U2264 {as.numeric(cutpoints$diagtrat$estimate)} days"),
-        glue("> {as.numeric(cutpoints$diagtrat$estimate)} days")
-      )
-    ),
-    .after = "diagtrat"
-  ) |>
-  select(!c(anodiag, diagtrat))
+      .after = "diagtrat"
+    ) |>
+    select(!c(anodiag, diagtrat))
+}
 
-rm(cutpoints)
-
-# Creating training and test samples
-set.seed(428)
-lines_train <- createDataPartition(
-  data$event,
-  p = 0.7, 
-  list = FALSE,
-  times = 1
-)
-data_train <- data[lines_train, ]
-data_test <- data[-lines_train, ]
+data <- cria_categorias(data_aux)
+data_train <- cria_categorias(data_train_aux)
+data_test <- cria_categorias(data_test_aux)
 ```
 
 The proportion of events was approximately the same across all total, train (70%) and test (30%) datasets, as shown in \textbf{Table \ref{tab:events}}.
@@ -283,11 +292,6 @@ gera_tabela_surv_latex <- function(data_total, data_train, data_test,
 }
 ```
 
-
-```{r echo=FALSE}
-data_train <- data[lines_train, ]
-data_test <- data[-lines_train, ]
-```
 
 ```{r results='asis', echo=FALSE}
 gera_tabela_surv_latex(data, data_train, data_test)
